@@ -7,16 +7,25 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/open-cluster-management/leaf-hub-spec-sync/pkg/bundle"
 	"github.com/open-cluster-management/leaf-hub-spec-sync/pkg/controller/helpers"
+	"github.com/open-cluster-management/leaf-hub-spec-sync/pkg/controller/rbac"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	updateOperation      = "update"
+	deleteOperation      = "delete"
+	impersonateOperation = "impersonate"
+)
+
 // LeafHubBundlesSpecSync syncs bundles spec objects.
 type LeafHubBundlesSpecSync struct {
-	log               logr.Logger
-	k8sClient         client.Client
-	bundleUpdatesChan chan *bundle.ObjectsBundle
+	log                  logr.Logger
+	k8sClient            client.Client
+	impersonationManager *rbac.ImpersonationManager
+	bundleUpdatesChan    chan *bundle.ObjectsBundle
 }
 
 // AddLeafHubBundlesSpecSync adds bundles spec syncer to the manager.
@@ -33,9 +42,10 @@ func AddLeafHubBundlesSpecSync(log logr.Logger, mgr ctrl.Manager, bundleUpdatesC
 	}
 
 	if err := mgr.Add(&LeafHubBundlesSpecSync{
-		log:               log,
-		k8sClient:         k8sClient,
-		bundleUpdatesChan: bundleUpdatesChan,
+		log:                  log,
+		k8sClient:            k8sClient,
+		impersonationManager: rbac.NewImpersonationManager(config),
+		bundleUpdatesChan:    bundleUpdatesChan,
 	}); err != nil {
 		return fmt.Errorf("failed to add bundles spec syncer - %w", err)
 	}
@@ -65,9 +75,13 @@ func (syncer *LeafHubBundlesSpecSync) sync(ctx context.Context) {
 	for {
 		receivedBundle := <-syncer.bundleUpdatesChan
 		for _, obj := range receivedBundle.Objects {
+			if err := syncer.impersonationManager.Impersonate(obj); err != nil {
+				syncer.logFailure(err, obj, impersonateOperation)
+				continue
+			}
+
 			if err := helpers.UpdateObject(ctx, syncer.k8sClient, obj); err != nil {
-				syncer.log.Error(err, "failed to update object", "name", obj.GetName(),
-					"namespace", obj.GetNamespace(), "kind", obj.GetKind())
+				syncer.logFailure(err, obj, updateOperation)
 			} else {
 				syncer.log.Info("object updated", "name", obj.GetName(), "namespace",
 					obj.GetNamespace(), "kind", obj.GetKind())
@@ -75,13 +89,22 @@ func (syncer *LeafHubBundlesSpecSync) sync(ctx context.Context) {
 		}
 
 		for _, obj := range receivedBundle.DeletedObjects {
+			if err := syncer.impersonationManager.Impersonate(obj); err != nil {
+				syncer.logFailure(err, obj, impersonateOperation)
+				continue
+			}
+
 			if deleted, err := helpers.DeleteObject(ctx, syncer.k8sClient, obj); err != nil {
-				syncer.log.Error(err, "failed to delete object", "name", obj.GetName(),
-					"namespace", obj.GetNamespace(), "kind", obj.GetKind())
+				syncer.logFailure(err, obj, deleteOperation)
 			} else if deleted {
 				syncer.log.Info("object deleted", "name", obj.GetName(), "namespace",
 					obj.GetNamespace(), "kind", obj.GetKind())
 			}
 		}
 	}
+}
+
+func (syncer *LeafHubBundlesSpecSync) logFailure(err error, obj *unstructured.Unstructured, operation string) {
+	syncer.log.Error(err, fmt.Sprintf("failed to %s", operation), "name", obj.GetName(),
+		"namespace", obj.GetNamespace(), "kind", obj.GetKind())
 }
