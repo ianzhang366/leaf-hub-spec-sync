@@ -55,6 +55,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - users
+  verbs:
+  - impersonate
 ---
 
 kind: ClusterRoleBinding
