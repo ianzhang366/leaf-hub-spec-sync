@@ -9,9 +9,7 @@ import (
 	"github.com/open-cluster-management/leaf-hub-spec-sync/pkg/controller/helpers"
 	"github.com/open-cluster-management/leaf-hub-spec-sync/pkg/controller/rbac"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -23,28 +21,20 @@ const (
 // LeafHubBundlesSpecSync syncs bundles spec objects.
 type LeafHubBundlesSpecSync struct {
 	log                  logr.Logger
-	k8sClient            client.Client
 	impersonationManager *rbac.ImpersonationManager
 	bundleUpdatesChan    chan *bundle.ObjectsBundle
 }
 
 // AddLeafHubBundlesSpecSync adds bundles spec syncer to the manager.
 func AddLeafHubBundlesSpecSync(log logr.Logger, mgr ctrl.Manager, bundleUpdatesChan chan *bundle.ObjectsBundle) error {
-	// creates the in-cluster config
-	config, err := rest.InClusterConfig()
+	impersonationManager, err := rbac.NewImpersonationManager()
 	if err != nil {
-		return fmt.Errorf("failed to get in cluster kubeconfig - %w", err)
-	}
-
-	k8sClient, err := client.New(config, client.Options{})
-	if err != nil {
-		return fmt.Errorf("failed to initialize k8s client - %w", err)
+		return fmt.Errorf("failed to initialize impersonation manager - %w", err)
 	}
 
 	if err := mgr.Add(&LeafHubBundlesSpecSync{
 		log:                  log,
-		k8sClient:            k8sClient,
-		impersonationManager: rbac.NewImpersonationManager(config),
+		impersonationManager: impersonationManager,
 		bundleUpdatesChan:    bundleUpdatesChan,
 	}); err != nil {
 		return fmt.Errorf("failed to add bundles spec syncer - %w", err)
@@ -75,12 +65,13 @@ func (syncer *LeafHubBundlesSpecSync) sync(ctx context.Context) {
 	for {
 		receivedBundle := <-syncer.bundleUpdatesChan
 		for _, obj := range receivedBundle.Objects {
-			if err := syncer.impersonationManager.Impersonate(obj); err != nil {
+			k8sClient, err := syncer.impersonationManager.Impersonate(obj)
+			if err != nil {
 				syncer.logFailure(err, obj, impersonateOperation)
 				continue
 			}
 
-			if err := helpers.UpdateObject(ctx, syncer.k8sClient, obj); err != nil {
+			if err := helpers.UpdateObject(ctx, k8sClient, obj); err != nil {
 				syncer.logFailure(err, obj, updateOperation)
 			} else {
 				syncer.log.Info("object updated", "name", obj.GetName(), "namespace",
@@ -89,12 +80,13 @@ func (syncer *LeafHubBundlesSpecSync) sync(ctx context.Context) {
 		}
 
 		for _, obj := range receivedBundle.DeletedObjects {
-			if err := syncer.impersonationManager.Impersonate(obj); err != nil {
+			k8sClient, err := syncer.impersonationManager.Impersonate(obj)
+			if err != nil {
 				syncer.logFailure(err, obj, impersonateOperation)
 				continue
 			}
 
-			if deleted, err := helpers.DeleteObject(ctx, syncer.k8sClient, obj); err != nil {
+			if deleted, err := helpers.DeleteObject(ctx, k8sClient, obj); err != nil {
 				syncer.logFailure(err, obj, deleteOperation)
 			} else if deleted {
 				syncer.log.Info("object deleted", "name", obj.GetName(), "namespace",

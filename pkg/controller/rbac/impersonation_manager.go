@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -14,43 +15,60 @@ const (
 )
 
 // NewImpersonationManager creates a new instance of ImpersonationManager.
-func NewImpersonationManager(config *rest.Config) *ImpersonationManager {
-	impersonationConfigCache := make(map[string]rest.ImpersonationConfig)
+func NewImpersonationManager() (*ImpersonationManager, error) {
+	// creates the in-cluster config
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get in cluster kubeconfig - %w", err)
+	}
+
+	controllerK8sClient, err := client.New(config, client.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize k8s client - %w", err)
+	}
+
+	k8sClientsCache := make(map[string]client.Client)
 	// when there is no user identity in the object, use the default controller impersonation config
-	impersonationConfigCache[noUserIdentity] = config.Impersonate
+	k8sClientsCache[noUserIdentity] = controllerK8sClient
 
 	return &ImpersonationManager{
-		k8sConfig:                config,
-		impersonationConfigCache: make(map[string]rest.ImpersonationConfig),
-	}
+		k8sConfig:       config,
+		k8sClientsCache: k8sClientsCache,
+	}, nil
 }
 
 // ImpersonationManager manages the k8s clients for the various users and for the controller.
 type ImpersonationManager struct {
-	k8sConfig                *rest.Config
-	impersonationConfigCache map[string]rest.ImpersonationConfig
+	k8sConfig       *rest.Config
+	k8sClientsCache map[string]client.Client
 }
 
 // Impersonate gets an object and returns the k8s client that represents the request user.
 // in case the user-identity header doesn't exist on the object, returns the controller k8s client.
-func (manager *ImpersonationManager) Impersonate(obj *unstructured.Unstructured) error {
+func (manager *ImpersonationManager) Impersonate(obj *unstructured.Unstructured) (client.Client, error) {
 	userIdentity, err := manager.getUserIdentityFromObj(obj)
 	if err != nil {
-		return fmt.Errorf("failed to get user identity from object - %w", err)
+		return nil, fmt.Errorf("failed to get user identity from object - %w", err)
 	}
 
 	// in case no user identity was received, it will find the default controller k8s client in the cache.
-	if _, found := manager.impersonationConfigCache[userIdentity]; !found {
-		manager.impersonationConfigCache[userIdentity] = rest.ImpersonationConfig{
+	if _, found := manager.k8sClientsCache[userIdentity]; !found {
+		newConfig := rest.CopyConfig(manager.k8sConfig)
+		newConfig.Impersonate = rest.ImpersonationConfig{
 			UserName: userIdentity,
 			Groups:   nil,
 			Extra:    nil,
 		}
+
+		userK8sClient, err := client.New(newConfig, client.Options{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create new k8s client for user - %w", err)
+		}
+
+		manager.k8sClientsCache[userIdentity] = userK8sClient
 	}
 
-	manager.k8sConfig.Impersonate = manager.impersonationConfigCache[userIdentity] // configure impersonation.
-
-	return nil
+	return manager.k8sClientsCache[userIdentity], nil
 }
 
 // returns an empty string in case the user-identity annotation doesn't exist in the object.
