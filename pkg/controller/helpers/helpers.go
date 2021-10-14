@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,6 +15,8 @@ import (
 const (
 	controllerName      = "leaf-hub-spec-sync"
 	notFoundErrorSuffix = "not found"
+
+	targetNamespace = "hub-of-hubs.open-cluster-management.io/remoteNamespace"
 )
 
 // UpdateObject function updates a given k8s object.
@@ -20,6 +24,10 @@ func UpdateObject(ctx context.Context, k8sClient client.Client, obj *unstructure
 	objectBytes, err := obj.MarshalJSON()
 	if err != nil {
 		return fmt.Errorf("failed to update object - %w", err)
+	}
+
+	if err := ensureTargetNamespace; err != nil {
+		return fmt.Errorf("failed to create target namespace, err: %w", err)
 	}
 
 	forceChanges := true
@@ -45,4 +53,19 @@ func DeleteObject(ctx context.Context, k8sClient client.Client, obj *unstructure
 	}
 
 	return true, nil
+}
+
+// ensureTargetNamespace creates a target namespace if the object have a targetNamespace annotation
+func ensureTargetNamespace(ctx context.Context, k8sClient client.Client, obj *unstructured.Unstructured) error {
+	a := obj.GetAnnotations()
+
+	if len(a) == 0 || a[targetNamespace] == "" {
+		return nil
+	}
+
+	tNs := a[targetNamespace]
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: tNs}}
+
+	return k8sClient.Create(ctx, ns)
 }
