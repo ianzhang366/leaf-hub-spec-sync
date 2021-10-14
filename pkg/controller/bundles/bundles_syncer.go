@@ -7,7 +7,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/open-cluster-management/leaf-hub-spec-sync/pkg/bundle"
 	"github.com/open-cluster-management/leaf-hub-spec-sync/pkg/controller/helpers"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -21,20 +20,9 @@ type LeafHubBundlesSpecSync struct {
 
 // AddLeafHubBundlesSpecSync adds bundles spec syncer to the manager.
 func AddLeafHubBundlesSpecSync(log logr.Logger, mgr ctrl.Manager, bundleUpdatesChan chan *bundle.ObjectsBundle) error {
-	// creates the in-cluster config
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return fmt.Errorf("failed to get in cluster kubeconfig - %w", err)
-	}
-
-	k8sClient, err := client.New(config, client.Options{})
-	if err != nil {
-		return fmt.Errorf("failed to initialize k8s client - %w", err)
-	}
-
 	if err := mgr.Add(&LeafHubBundlesSpecSync{
 		log:               log,
-		k8sClient:         k8sClient,
+		k8sClient:         mgr.GetClient(),
 		bundleUpdatesChan: bundleUpdatesChan,
 	}); err != nil {
 		return fmt.Errorf("failed to add bundles spec syncer - %w", err)
