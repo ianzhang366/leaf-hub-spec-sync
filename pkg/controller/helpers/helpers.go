@@ -55,15 +55,9 @@ func DeleteObject(ctx context.Context, k8sClient client.Client, obj *unstructure
 	return true, nil
 }
 
-// ensureTargetNamespace creates a target namespace if the object have a targetNamespace annotation
+// ensureTargetNamespace creates a target namespace if the object's namespace doesn't exist on leaf hub, mainly for clusterlifecycle
 func ensureTargetNamespace(ctx context.Context, k8sClient client.Client, obj *unstructured.Unstructured) error {
-	a := obj.GetAnnotations()
-
-	if len(a) == 0 || a[targetNamespace] == "" {
-		return nil
-	}
-
-	tNs := a[targetNamespace]
+	tNs := obj.GetName()
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: tNs}}
 
