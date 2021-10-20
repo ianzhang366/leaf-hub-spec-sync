@@ -61,5 +61,9 @@ func ensureTargetNamespace(ctx context.Context, k8sClient client.Client, obj *un
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: tNs}}
 
+	if err := k8sClient.Get(ctx, ns); err != nil {
+		return nil
+	}
+
 	return k8sClient.Create(ctx, ns)
 }
